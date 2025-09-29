@@ -32,5 +32,11 @@
                 "FileUploader": "StalkArtisan\\LaravelFileUploader\\Facades\\FileUploader"
             }
         }
+    },
+    "homepage": "https://github.com/stalkdeveloper/laravel-file-uploader",
+    "keywords": ["laravel", "file upload", "uploader", "storage"],
+    "support": {
+        "issues": "https://github.com/stalkdeveloper/laravel-file-uploader/issues",
+        "source": "https://github.com/stalkdeveloper/laravel-file-uploader"
     }
 }
