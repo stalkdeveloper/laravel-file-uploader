@@ -12,16 +12,18 @@ use Illuminate\Support\Str;
 
 class FileUploaderService implements FileUploaderInterface
 {
-    public function upload(UploadedFile $file, string $fileType = 'any', ?int $maxSize = null): File
+    public function upload(UploadedFile $file, string $fileType = 'any', ?int $maxSize = null, ?string $folder = null, ?string $fileableType = null, ?int $fileableId = null): File
     {
         $this->validateFile($file, $fileType, $maxSize);
         
         $config = config('file-uploader');
         $disk = $config['storage']['disk'];
-        $path = $config['storage']['path'];
+        
+        // Build the storage path with folder structure
+        $storagePath = $this->buildStoragePath($config['storage']['path'], $folder);
         
         $fileName = $this->generateFileName($file);
-        $filePath = $file->storeAs($path, $fileName, ['disk' => $disk]);
+        $filePath = $file->storeAs($storagePath, $fileName, ['disk' => $disk]);
         
         return File::create([
             'original_name' => $file->getClientOriginalName(),
@@ -33,39 +35,70 @@ class FileUploaderService implements FileUploaderInterface
             'file_type' => $fileType,
             'source_type' => 'upload',
             'disk' => $disk,
+            'fileable_type' => $fileableType,
+            'fileable_id' => $fileableId,
         ]);
     }
     
-    public function uploadFromUrl(string $url, string $fileType = 'any', ?int $maxSize = null): File
+    public function uploadFromUrl(string $url, string $fileType = 'any', ?int $maxSize = null, ?string $folder = null, ?string $fileableType = null, ?int $fileableId = null): File
     {
-        $this->validateUrl($url, $fileType, $maxSize);
+        \Log::info("Starting URL upload: {$url}");
+        
+        // Simple URL validation first
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            throw InvalidFileException::invalidUrl($url);
+        }
         
         $config = config('file-uploader');
         $timeout = $config['validation']['url']['timeout'];
         
         try {
+            \Log::info("Making HTTP request to: {$url}");
+            
             $response = Http::timeout($timeout)
                 ->withHeaders([
-                    'User-Agent' => $config['validation']['url']['user_agent']
+                    'User-Agent' => $config['validation']['url']['user_agent'],
+                    'Accept' => '*/*',
                 ])
                 ->get($url);
                 
+            \Log::info("HTTP Response Status: " . $response->status());
+            
             if (!$response->successful()) {
+                \Log::error("HTTP request failed", [
+                    'status' => $response->status(),
+                    'url' => $url
+                ]);
                 throw InvalidFileException::downloadFailed($url);
             }
             
             $content = $response->body();
             $contentSize = strlen($content);
             
-            // Validate content size
-            $maxSize = $maxSize ?? $config['validation']['url']['max_size'] * 1024;
-            if ($contentSize > $maxSize) {
-                throw InvalidFileException::sizeExceeded($maxSize / 1024);
+            \Log::info("Downloaded content size: " . $contentSize . " bytes");
+            
+            // Get file type config
+            $fileTypeConfig = $this->getFileTypeConfig($fileType);
+            $maxSizeKB = $maxSize ?: $fileTypeConfig['max_size'];
+            $maxSizeBytes = $maxSizeKB * 1024;
+            
+            if ($contentSize > $maxSizeBytes) {
+                \Log::error("File size exceeded", [
+                    'content_size' => $contentSize,
+                    'max_size' => $maxSizeBytes
+                ]);
+                throw InvalidFileException::sizeExceeded($maxSizeKB);
             }
             
-            // Validate MIME type
+            // Validate MIME type from content
             $mimeType = $this->getMimeTypeFromContent($content);
-            if (!$this->isValidMimeType($mimeType, $fileType, 'url')) {
+            \Log::info("Detected MIME type: " . $mimeType);
+            
+            if (!$this->isValidMimeType($mimeType, $fileType)) {
+                \Log::error("Invalid MIME type", [
+                    'mime_type' => $mimeType,
+                    'file_type' => $fileType
+                ]);
                 throw InvalidFileException::invalidMimeType($mimeType);
             }
             
@@ -76,6 +109,13 @@ class FileUploaderService implements FileUploaderInterface
             $extension = $this->getExtensionFromMimeType($mimeType);
             $originalName = $this->extractFilenameFromUrl($url) ?: "file.{$extension}";
             
+            \Log::info("Creating UploadedFile", [
+                'temp_path' => $tempPath,
+                'original_name' => $originalName,
+                'mime_type' => $mimeType,
+                'extension' => $extension
+            ]);
+            
             $uploadedFile = new UploadedFile(
                 $tempPath,
                 $originalName,
@@ -84,7 +124,7 @@ class FileUploaderService implements FileUploaderInterface
                 true
             );
             
-            $file = $this->upload($uploadedFile, $fileType, $maxSize);
+            $file = $this->upload($uploadedFile, $fileType, $maxSize, $folder, $fileableType, $fileableId);
             $file->update([
                 'source_type' => 'url',
                 'source_url' => $url,
@@ -93,23 +133,37 @@ class FileUploaderService implements FileUploaderInterface
             // Clean up temporary file
             unlink($tempPath);
             
+            \Log::info("URL upload completed successfully", [
+                'file_id' => $file->id,
+                'file_path' => $file->file_path
+            ]);
+            
             return $file;
             
         } catch (InvalidFileException $e) {
+            \Log::error("InvalidFileException in uploadFromUrl", [
+                'url' => $url,
+                'error' => $e->getMessage()
+            ]);
             throw $e;
         } catch (\Exception $e) {
-            throw InvalidFileException::downloadFailed($url);
+            \Log::error("Exception in uploadFromUrl", [
+                'url' => $url,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw InvalidFileException::downloadFailed($url . " - " . $e->getMessage());
         }
     }
     
-    public function handle(mixed $source, string $fileType = 'any', ?int $maxSize = null): File
+    public function handle(mixed $source, string $fileType = 'any', ?int $maxSize = null, ?string $folder = null, ?string $fileableType = null, ?int $fileableId = null): File
     {
         if ($source instanceof UploadedFile) {
-            return $this->upload($source, $fileType, $maxSize);
+            return $this->upload($source, $fileType, $maxSize, $folder, $fileableType, $fileableId);
         }
         
         if (is_string($source) && filter_var($source, FILTER_VALIDATE_URL)) {
-            return $this->uploadFromUrl($source, $fileType, $maxSize);
+            return $this->uploadFromUrl($source, $fileType, $maxSize, $folder, $fileableType, $fileableId);
         }
         
         throw InvalidFileException::invalidFile();
@@ -117,19 +171,21 @@ class FileUploaderService implements FileUploaderInterface
     
     public function validateFile(UploadedFile $file, string $fileType = 'any', ?int $maxSize = null): bool
     {
-        $config = config('file-uploader.validation.file');
+        $fileTypeConfig = $this->getFileTypeConfig($fileType);
         
         if (!$file->isValid()) {
             throw InvalidFileException::invalidFile();
         }
         
-        $maxSize = $maxSize ?? $config['max_size'] * 1024;
-        if ($file->getSize() > $maxSize) {
-            throw InvalidFileException::sizeExceeded($maxSize / 1024);
+        $maxSizeKB = $maxSize ?: $fileTypeConfig['max_size'];
+        $maxSizeBytes = $maxSizeKB * 1024;
+        
+        if ($file->getSize() > $maxSizeBytes) {
+            throw InvalidFileException::sizeExceeded($maxSizeKB);
         }
         
         $mimeType = $file->getMimeType();
-        if (!$this->isValidMimeType($mimeType, $fileType, 'file')) {
+        if (!$this->isValidMimeType($mimeType, $fileType)) {
             throw InvalidFileException::invalidMimeType($mimeType);
         }
         
@@ -138,6 +194,7 @@ class FileUploaderService implements FileUploaderInterface
     
     public function validateUrl(string $url, string $fileType = 'any', ?int $maxSize = null): bool
     {
+        // Simple URL validation
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             throw InvalidFileException::invalidUrl($url);
         }
@@ -146,21 +203,6 @@ class FileUploaderService implements FileUploaderInterface
         $scheme = parse_url($url, PHP_URL_SCHEME);
         
         if (!in_array($scheme, $allowedSchemes)) {
-            throw InvalidFileException::invalidUrl($url);
-        }
-        
-        // Quick header check
-        $headers = @get_headers($url, 1);
-        if (!$headers || strpos($headers[0], '200') === false) {
-            throw InvalidFileException::invalidUrl($url);
-        }
-        
-        $contentType = $headers['Content-Type'] ?? '';
-        if (!is_string($contentType)) {
-            $contentType = end($contentType);
-        }
-        
-        if (!$this->isValidContentType($contentType, $fileType)) {
             throw InvalidFileException::invalidUrl($url);
         }
         
@@ -177,6 +219,46 @@ class FileUploaderService implements FileUploaderInterface
         }
     }
     
+    public function getFileTypeConfig(string $fileType): array
+    {
+        $config = config('file-uploader.file_types');
+        
+        if (!isset($config[$fileType])) {
+            throw new \Exception("Unsupported file type: {$fileType}");
+        }
+        
+        return $config[$fileType];
+    }
+    
+    /**
+     * Build storage path with folder structure
+     */
+    private function buildStoragePath(string $basePath, ?string $folder = null): string
+    {
+        $path = $basePath;
+        
+        if ($folder) {
+            // Clean the folder path (remove slashes, dots, etc.)
+            $cleanFolder = $this->cleanFolderPath($folder);
+            $path = $basePath . '/' . $cleanFolder;
+        }
+        
+        return $path;
+    }
+    
+    /**
+     * Clean folder path to prevent directory traversal
+     */
+    private function cleanFolderPath(string $folder): string
+    {
+        // Remove any dangerous characters and normalize path
+        $folder = str_replace(['..', '\\', '//'], '', $folder);
+        $folder = trim($folder, '/');
+        $folder = preg_replace('/[^a-zA-Z0-9_\-\/]/', '_', $folder);
+        
+        return $folder;
+    }
+    
     private function generateFileName(UploadedFile $file): string
     {
         $config = config('file-uploader.naming');
@@ -191,79 +273,53 @@ class FileUploaderService implements FileUploaderInterface
     
     private function getMimeTypeFromContent(string $content): string
     {
+        if (empty($content)) {
+            throw new \Exception("Empty content cannot have MIME type");
+        }
+        
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mimeType = finfo_buffer($finfo, $content);
         finfo_close($finfo);
         
-        return $mimeType;
+        return $mimeType ?: 'application/octet-stream';
     }
     
-    private function isValidMimeType(string $mimeType, string $fileType, string $source = 'file'): bool
+    private function isValidMimeType(string $mimeType, string $fileType): bool
     {
-        $config = config("file-uploader.validation.{$source}");
-        $allowedMimes = $config['mimes'][$fileType] ?? $config['mimes']['any'];
+        $fileTypeConfig = $this->getFileTypeConfig($fileType);
+        $allowedExtensions = $fileTypeConfig['mimes'];
         
-        $mimeMap = [
-            'jpg' => 'image/jpeg',
-            'jpeg' => 'image/jpeg',
-            'png' => 'image/png',
-            'gif' => 'image/gif',
-            'webp' => 'image/webp',
-            'bmp' => 'image/bmp',
-            'svg' => 'image/svg+xml',
-            'mp4' => 'video/mp4',
-            'mkv' => 'video/x-matroska',
-            'avi' => 'video/x-msvideo',
-            'mov' => 'video/quicktime',
-            'pdf' => 'application/pdf',
-            'doc' => 'application/msword',
-            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'xls' => 'application/vnd.ms-excel',
-            'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'ppt' => 'application/vnd.ms-powerpoint',
-            'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'csv' => 'text/csv',
-        ];
+        $mimeMap = $this->getMimeMap();
         
-        $allowedMimeTypes = array_intersect_key($mimeMap, array_flip($allowedMimes));
-        
-        return in_array($mimeType, $allowedMimeTypes);
-    }
-    
-    private function isValidContentType(string $contentType, string $fileType): bool
-    {
-        $allowedTypes = [
-            'image' => ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'],
-            'video' => ['video/mp4', 'video/x-matroska', 'video/x-msvideo', 'video/quicktime'],
-            'pdf' => ['application/pdf'],
-            'document' => ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                          'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                          'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-            'excel' => ['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'],
-            'any' => [
-                'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml',
-                'video/mp4', 'video/x-matroska', 'video/x-msvideo', 'video/quicktime',
-                'application/pdf',
-                'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                'text/csv'
-            ]
-        ];
-        
-        foreach ($allowedTypes[$fileType] ?? $allowedTypes['any'] as $type) {
-            if (strpos($contentType, $type) !== false) {
-                return true;
+        $allowedMimeTypes = [];
+        foreach ($allowedExtensions as $ext) {
+            if (isset($mimeMap[$ext])) {
+                $allowedMimeTypes = array_merge($allowedMimeTypes, (array)$mimeMap[$ext]);
             }
         }
         
-        return false;
+        $allowedMimeTypes = array_unique($allowedMimeTypes);
+        
+        \Log::info("Checking MIME type", [
+            'mime_type' => $mimeType,
+            'file_type' => $fileType,
+            'allowed_mime_types' => $allowedMimeTypes
+        ]);
+        
+        return in_array($mimeType, $allowedMimeTypes);
     }
     
     private function extractFilenameFromUrl(string $url): string
     {
         $path = parse_url($url, PHP_URL_PATH);
-        return basename($path) ?: '';
+        $filename = basename($path) ?: 'downloaded_file';
+        
+        // If no extension, try to get from Content-Disposition or use default
+        if (!pathinfo($filename, PATHINFO_EXTENSION)) {
+            $filename .= '.tmp';
+        }
+        
+        return $filename;
     }
     
     private function getExtensionFromMimeType(string $mimeType): string
@@ -279,6 +335,7 @@ class FileUploaderService implements FileUploaderInterface
             'video/x-matroska' => 'mkv',
             'video/x-msvideo' => 'avi',
             'video/quicktime' => 'mov',
+            'video/webm' => 'webm',
             'application/pdf' => 'pdf',
             'application/msword' => 'doc',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
@@ -287,8 +344,48 @@ class FileUploaderService implements FileUploaderInterface
             'application/vnd.ms-powerpoint' => 'ppt',
             'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
             'text/csv' => 'csv',
+            'text/plain' => 'txt',
+            'application/rtf' => 'rtf',
+            'audio/mpeg' => 'mp3',
+            'audio/wav' => 'wav',
+            'audio/ogg' => 'ogg',
+            'application/zip' => 'zip',
+            'application/x-rar-compressed' => 'rar',
         ];
         
         return $mimeMap[$mimeType] ?? 'bin';
+    }
+    
+    private function getMimeMap(): array
+    {
+        return [
+            'jpg' => ['image/jpeg'],
+            'jpeg' => ['image/jpeg'],
+            'png' => ['image/png'],
+            'gif' => ['image/gif'],
+            'webp' => ['image/webp'],
+            'bmp' => ['image/bmp'],
+            'svg' => ['image/svg+xml'],
+            'mp4' => ['video/mp4'],
+            'mkv' => ['video/x-matroska'],
+            'avi' => ['video/x-msvideo'],
+            'mov' => ['video/quicktime'],
+            'webm' => ['video/webm'],
+            'pdf' => ['application/pdf'],
+            'doc' => ['application/msword'],
+            'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+            'xls' => ['application/vnd.ms-excel'],
+            'xlsx' => ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+            'ppt' => ['application/vnd.ms-powerpoint'],
+            'pptx' => ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+            'csv' => ['text/csv'],
+            'txt' => ['text/plain'],
+            'rtf' => ['application/rtf'],
+            'mp3' => ['audio/mpeg'],
+            'wav' => ['audio/wav'],
+            'ogg' => ['audio/ogg'],
+            'zip' => ['application/zip'],
+            'rar' => ['application/x-rar-compressed'],
+        ];
     }
 }

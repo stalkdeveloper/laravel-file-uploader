@@ -20,6 +20,8 @@ class File extends Model
         'source_type',
         'source_url',
         'disk',
+        'fileable_id',  /* foreign_key modelID */
+        'fileable_type' /* Model class User/Post */
     ];
     
     protected $casts = [

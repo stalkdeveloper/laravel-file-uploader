@@ -7,30 +7,50 @@ return [
         'url_path' => 'storage/files',
     ],
     
-    'validation' => [
-        'file' => [
-            'max_size' => 5120, // 5MB in KB, default
-            'mimes' => [
-                'image' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'],
-                'video' => ['mp4', 'mkv', 'avi', 'mov'],
-                'pdf' => ['pdf'],
-                'document' => ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
-                'excel' => ['xls', 'xlsx', 'csv'],
-                'any' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'mkv', 'avi', 'mov', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv']
-            ],
+    'defaults' => [
+        'max_size' => 5120, // 5MB in KB
+        'file_type' => 'any',
+    ],
+    
+    'file_types' => [
+        'image' => [
+            'mimes' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'],
+            'max_size' => 5120, // 5MB
         ],
+        'video' => [
+            'mimes' => ['mp4', 'mkv', 'avi', 'mov', 'webm'],
+            'max_size' => 51200, // 50MB
+        ],
+        'pdf' => [
+            'mimes' => ['pdf'],
+            'max_size' => 10240, // 10MB
+        ],
+        'document' => [
+            'mimes' => ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf'],
+            'max_size' => 20480, // 20MB
+        ],
+        'excel' => [
+            'mimes' => ['xls', 'xlsx', 'csv'],
+            'max_size' => 10240, // 10MB
+        ],
+        'audio' => [
+            'mimes' => ['mp3', 'wav', 'ogg', 'aac', 'flac'],
+            'max_size' => 20480, // 20MB
+        ],
+        'archive' => [
+            'mimes' => ['zip', 'rar', '7z', 'tar', 'gz'],
+            'max_size' => 51200, // 50MB
+        ],
+        'any' => [
+            'mimes' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'mkv', 'avi', 'mov', 'webm', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv', 'mp3', 'wav', 'zip', 'rar'],
+            'max_size' => 5120, // 5MB
+        ],
+    ],
+    
+    'validation' => [
         'url' => [
-            'timeout' => 30,
-            'max_size' => 5120, // 5MB in KB, default
-            'allowed_mimes' => [
-                'image' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
-                'video' => ['mp4', 'mkv', 'avi', 'mov'],
-                'pdf' => ['pdf'],
-                'document' => ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
-                'excel' => ['xls', 'xlsx', 'csv'],
-                'any' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'mp4', 'mkv', 'avi', 'mov', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv']
-            ],
-            'user_agent' => 'Laravel File Uploader/1.0',
+            'timeout' => 60,
+            'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         ],
     ],
     
