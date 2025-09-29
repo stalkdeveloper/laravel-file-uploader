@@ -42,9 +42,6 @@ class FileUploaderService implements FileUploaderInterface
     
     public function uploadFromUrl(string $url, string $fileType = 'any', ?int $maxSize = null, ?string $folder = null, ?string $fileableType = null, ?int $fileableId = null): File
     {
-        \Log::info("Starting URL upload: {$url}");
-        
-        // Simple URL validation first
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             throw InvalidFileException::invalidUrl($url);
         }
@@ -53,7 +50,6 @@ class FileUploaderService implements FileUploaderInterface
         $timeout = $config['validation']['url']['timeout'];
         
         try {
-            \Log::info("Making HTTP request to: {$url}");
             
             $response = Http::timeout($timeout)
                 ->withHeaders([
@@ -61,60 +57,33 @@ class FileUploaderService implements FileUploaderInterface
                     'Accept' => '*/*',
                 ])
                 ->get($url);
-                
-            \Log::info("HTTP Response Status: " . $response->status());
             
             if (!$response->successful()) {
-                \Log::error("HTTP request failed", [
-                    'status' => $response->status(),
-                    'url' => $url
-                ]);
                 throw InvalidFileException::downloadFailed($url);
             }
             
             $content = $response->body();
             $contentSize = strlen($content);
             
-            \Log::info("Downloaded content size: " . $contentSize . " bytes");
-            
-            // Get file type config
             $fileTypeConfig = $this->getFileTypeConfig($fileType);
             $maxSizeKB = $maxSize ?: $fileTypeConfig['max_size'];
             $maxSizeBytes = $maxSizeKB * 1024;
             
             if ($contentSize > $maxSizeBytes) {
-                \Log::error("File size exceeded", [
-                    'content_size' => $contentSize,
-                    'max_size' => $maxSizeBytes
-                ]);
                 throw InvalidFileException::sizeExceeded($maxSizeKB);
             }
             
-            // Validate MIME type from content
             $mimeType = $this->getMimeTypeFromContent($content);
-            \Log::info("Detected MIME type: " . $mimeType);
             
             if (!$this->isValidMimeType($mimeType, $fileType)) {
-                \Log::error("Invalid MIME type", [
-                    'mime_type' => $mimeType,
-                    'file_type' => $fileType
-                ]);
                 throw InvalidFileException::invalidMimeType($mimeType);
             }
             
-            // Create temporary file
             $tempPath = tempnam(sys_get_temp_dir(), 'laravel_file_');
             file_put_contents($tempPath, $content);
             
             $extension = $this->getExtensionFromMimeType($mimeType);
             $originalName = $this->extractFilenameFromUrl($url) ?: "file.{$extension}";
-            
-            \Log::info("Creating UploadedFile", [
-                'temp_path' => $tempPath,
-                'original_name' => $originalName,
-                'mime_type' => $mimeType,
-                'extension' => $extension
-            ]);
             
             $uploadedFile = new UploadedFile(
                 $tempPath,
@@ -130,28 +99,11 @@ class FileUploaderService implements FileUploaderInterface
                 'source_url' => $url,
             ]);
             
-            // Clean up temporary file
             unlink($tempPath);
-            
-            \Log::info("URL upload completed successfully", [
-                'file_id' => $file->id,
-                'file_path' => $file->file_path
-            ]);
-            
             return $file;
-            
         } catch (InvalidFileException $e) {
-            \Log::error("InvalidFileException in uploadFromUrl", [
-                'url' => $url,
-                'error' => $e->getMessage()
-            ]);
             throw $e;
         } catch (\Exception $e) {
-            \Log::error("Exception in uploadFromUrl", [
-                'url' => $url,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
             throw InvalidFileException::downloadFailed($url . " - " . $e->getMessage());
         }
     }
@@ -299,13 +251,6 @@ class FileUploaderService implements FileUploaderInterface
         }
         
         $allowedMimeTypes = array_unique($allowedMimeTypes);
-        
-        \Log::info("Checking MIME type", [
-            'mime_type' => $mimeType,
-            'file_type' => $fileType,
-            'allowed_mime_types' => $allowedMimeTypes
-        ]);
-        
         return in_array($mimeType, $allowedMimeTypes);
     }
     
