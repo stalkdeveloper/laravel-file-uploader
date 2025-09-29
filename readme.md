@@ -99,30 +99,6 @@ return [
     ],
 ];
 ```
-
-## Package Structure
-```
-src/
-├── Contracts/
-│   └── FileUploaderInterface.php       # Interface defining file uploader methods
-├── config/
-│   └── file-uploader.php              # Configuration file
-├── database/
-│   └── migrations/2024_01_01_000000_create_files_table.php  # Migration for the files table
-├── Exceptions/
-│   └── InvalidFileException.php        # Custom exceptions
-├── Facades/
-│   └── FileUploader.php                # Facade for easy access
-├── Models/
-│   └── File.php                       # Eloquent model
-├── Providers/
-│   └── FileUploaderServiceProvider.php # Service provider
-├── Services/
-│   └── FileUploaderService.php         # Core upload logic
-└── Traits/
-    └── HasFileUploads.php             # Trait for models
-```
-
 ## Usage
 ### 1. Add Trait to Your Model
 ```php
